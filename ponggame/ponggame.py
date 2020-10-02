@@ -1,4 +1,5 @@
 import enum
+from math import sin, cos, pi
 
 import pygame
 from pygame import *
@@ -16,7 +17,7 @@ class Pad(sprite.Sprite):
     def __init__(self, align_right):
         sprite.Sprite.__init__(self)
         self.speed = 5
-        self.movement = PadMovement.STOP
+        self.dir = PadMovement.STOP
 
         '''Construct the pad image'''
         pad_width = 10
@@ -27,30 +28,44 @@ class Pad(sprite.Sprite):
         self.rect = self.image.get_bounding_rect()
 
         '''Position pad on screen'''
-        pad_offset_width = 30
+        self.offset_width = 30
         screen = display.get_surface()
-        pad_offset_top = (screen.get_height() - pad_height) / 2
-        self.rect.top = pad_offset_top
+        self.offset_top = (screen.get_height() - pad_height) / 2
+        self.rect.top = self.offset_top
         if align_right:
-            self.rect.right = screen.get_width() - pad_offset_width
+            self.rect.right = screen.get_width() - self.offset_width
         else:
-            self.rect.left = pad_offset_width
+            self.rect.left = self.offset_width
 
     def update(self):
-        if self.movement == PadMovement.UP:
-            self.rect.move_ip((0, -self.speed))
-        elif self.movement == PadMovement.DOWN:
-            self.rect.move_ip((0, self.speed))
+        dir_ = self.dir
+        screen: Rect = display.get_surface().get_rect()
+        rect = self.rect
+        if dir_ == PadMovement.UP and screen.top < rect.top:
+            rect.move_ip((0, -self.speed))
+        elif dir_ == PadMovement.DOWN and screen.bottom > rect.bottom:
+            rect.move_ip((0, self.speed))
 
     def move(self, movement):
-        self.movement = movement
+        self.dir = movement
+
+
+def get_norm_vector(angle):
+    rad = pi / 180 * angle
+    return cos(rad), sin(rad)
+
+
+def reflect(dir_):
+    return dir_[0], -dir_[1]
 
 
 class Ball(sprite.Sprite):
-    def __init__(self):
+    def __init__(self, pad_left, pad_right):
         sprite.Sprite.__init__(self)
         self.speed = 5
-        self.dir = (1, 0)
+        self.dir = (1.0, 0.0)
+        self.pad_left = pad_left
+        self.pad_right = pad_right
 
         '''Construct ball image'''
         width = 10
@@ -58,7 +73,7 @@ class Ball(sprite.Sprite):
         self.image = Surface((width, height))
         color_white = (255, 255, 255)
         self.image.fill(color_white)
-        self.rect = self.image.get_bounding_rect()
+        self.rect: Rect = self.image.get_bounding_rect()
 
         '''Position ball on screen'''
         screen = display.get_surface()
@@ -68,8 +83,33 @@ class Ball(sprite.Sprite):
         self.rect.top = height_middle
 
     def update(self):
-        self.rect.left += self.speed * self.dir[0]
-        self.rect.top += self.speed * self.dir[1]
+        rect = self.rect
+        pad_r: Rect = self.pad_right
+        pad_l: Rect = self.pad_left
+        dir_ = self.dir
+
+        '''Check and handle collision with pads'''
+        if rect.right > pad_r.left and rect.bottom > pad_r.top and rect.top < pad_r.bottom:
+            angle = 150 + (80 * (pad_r.top - rect.y) / pad_r.height)
+            self.dir = get_norm_vector(angle)
+            self.rect.x -= 8
+        elif rect.left < pad_l.right and rect.bottom > pad_l.top and rect.top < pad_l.bottom:
+            angle = 60 * ((pad_l.top - rect.y) / pad_l.height - 0.5)
+            self.dir = get_norm_vector(angle)
+            self.rect.x += 8
+
+        '''Check collision with top and bottom of display'''
+        screen = display.get_surface().get_rect()
+        if rect.top < screen.top:
+            self.dir = reflect(dir_)
+            self.rect.y += 8    # To avoid ball getting stuck in display
+        elif rect.bottom > screen.bottom:
+            self.dir = reflect(dir_)
+            self.rect.y -= 8    # To avoid ball getting stuck in display
+
+        '''Move ball'''
+        rect.left += self.speed * dir_[0]
+        rect.top += self.speed * dir_[1]
 
 
 player_left_controls = constants.K_w, constants.K_s
@@ -78,23 +118,9 @@ player_right_controls = constants.K_UP, constants.K_DOWN
 
 def main():
     pygame.init()
-
-    '''Initialize screen and background'''
-    screen = display.set_mode((800, 400))
-    display.set_caption("Pong")
-    background = Surface(screen.get_size())
-    background = background.convert()
-    background.fill((0, 0, 0))
-    screen.blit(background, (0, 0))
-    display.flip()
-    # pygame.mouse.set_visible(False)
-
-    '''Create game objects'''
-    pad_left = Pad(False)
-    pad_right = Pad(True)
-    ball = Ball()
-    allsprites = sprite.Group((pad_left, pad_right, ball))
-    clock: Clock = time.Clock()
+    background, screen = init_screen()
+    all_sprites, pad_left, pad_right = create_game_objects()
+    clock = Clock()
 
     '''Main loop'''
     run_game = True
@@ -124,12 +150,34 @@ def main():
             pad_right.move(PadMovement.STOP)
         event.pump()
 
-        allsprites.update()
+        all_sprites.update()
 
         '''Draw everything'''
         screen.blit(background, (0, 0))
-        allsprites.draw(screen)
+        all_sprites.draw(screen)
         display.flip()
+
+
+def init_screen():
+    """Initialize screen and background"""
+    screen = display.set_mode((800, 400))
+    display.set_caption("Pong")
+    background = Surface(screen.get_size())
+    background = background.convert()
+    background.fill((0, 0, 0))
+    screen.blit(background, (0, 0))
+    display.flip()
+    pygame.mouse.set_visible(False)
+    return background, screen
+
+
+def create_game_objects():
+    """Create game objects"""
+    pad_left = Pad(False)
+    pad_right = Pad(True)
+    ball = Ball(pad_left.rect, pad_right.rect)
+    allsprites = sprite.Group(pad_left, pad_right, ball)
+    return allsprites, pad_left, pad_right
 
 
 if __name__ == '__main__':
