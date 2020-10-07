@@ -1,5 +1,4 @@
 import enum
-from math import sin, cos, pi
 
 import pygame
 from pygame import *
@@ -30,8 +29,8 @@ class Pad(sprite.Sprite):
         '''Position pad on screen'''
         self.offset_width = 30
         screen = display.get_surface()
-        self.offset_top = (screen.get_height() - pad_height) / 2
-        self.rect.top = self.offset_top
+        screen_middle = screen.get_height() / 2
+        self.rect.centery = screen_middle
         if align_right:
             self.rect.right = screen.get_width() - self.offset_width
         else:
@@ -50,22 +49,26 @@ class Pad(sprite.Sprite):
         self.dir = movement
 
 
-def get_norm_vector(angle):
-    rad = pi / 180 * angle
-    return cos(rad), sin(rad)
-
-
-def reflect(dir_):
-    return dir_[0], -dir_[1]
+def sgn(val):
+    if val < 0:
+        return -1
+    elif val > 0:
+        return 1
+    return 0
 
 
 class Ball(sprite.Sprite):
     def __init__(self, pad_left, pad_right):
         sprite.Sprite.__init__(self)
-        self.speed = 5
-        self.dir = (1.0, 0.0)
+        self.min_speed = 5.0
+        self.max_speed = 10.0
+        self.speed = self.min_speed
+        self.vec: Vector2 = Vector2()
+        self.vec.x = 1.0
+        self.vec.y = 0.0
         self.pad_left = pad_left
         self.pad_right = pad_right
+        self.acc_xy_error = 0.0, 0.0  # Used to correct accumulated rounding errors in x and y when moving each frame
 
         '''Construct ball image'''
         width = 10
@@ -79,37 +82,77 @@ class Ball(sprite.Sprite):
         screen = display.get_surface()
         width_middle = (screen.get_width() - width) / 2
         height_middle = (screen.get_height() - height) / 2
-        self.rect.left = width_middle
-        self.rect.top = height_middle
+        self.START_POS = width_middle, height_middle
+        self.rect.centerx, self.rect.centery = self.START_POS
 
     def update(self):
-        rect = self.rect
-        pad_r: Rect = self.pad_right
-        pad_l: Rect = self.pad_left
-        dir_ = self.dir
+        old_vec = Vector2()
+        old_vec.x = self.vec.x
+        old_vec.y = self.vec.y
+        if self.outside_display():
+            self.rect.centerx, self.rect.centery = self.START_POS
+            self.speed = self.min_speed
+            self.vec.x = 1.0
+            self.vec.y = 0.0
+        else:
+            self.handle_pad_collision()
+            self.handle_display_collision()
+        self.move_ball()
+        if self.speed > self.max_speed:
+            print(self.speed)
 
-        '''Check and handle collision with pads'''
-        if rect.right > pad_r.left and rect.bottom > pad_r.top and rect.top < pad_r.bottom:
-            angle = 150 + (80 * (pad_r.top - rect.y) / pad_r.height)
-            self.dir = get_norm_vector(angle)
-            self.rect.x -= 8
-        elif rect.left < pad_l.right and rect.bottom > pad_l.top and rect.top < pad_l.bottom:
-            angle = 60 * ((pad_l.top - rect.y) / pad_l.height - 0.5)
-            self.dir = get_norm_vector(angle)
-            self.rect.x += 8
+    def move_ball(self):
+        """Move ball"""
+        delta_x = self.speed * (self.vec.x ** 2) * sgn(self.vec.x)
+        delta_y = self.speed * (self.vec.y ** 2) * sgn(self.vec.y)
+        error_x = self.acc_xy_error[0]
+        error_y = self.acc_xy_error[1]
+        delta_x_corrected = round(delta_x + error_x)
+        delta_y_corrected = round(delta_y + error_y)
+        new_error_x = delta_x - delta_x_corrected
+        new_error_y = delta_y - delta_y_corrected
+        self.acc_xy_error = error_x + new_error_x, error_y + new_error_y
+        self.rect.move_ip(delta_x_corrected, delta_y_corrected)
 
-        '''Check collision with top and bottom of display'''
+    def handle_display_collision(self):
+        """Check and handle collision with top and bottom of display"""
         screen = display.get_surface().get_rect()
-        if rect.top < screen.top:
-            self.dir = reflect(dir_)
-            self.rect.y += 8    # To avoid ball getting stuck in display
-        elif rect.bottom > screen.bottom:
-            self.dir = reflect(dir_)
-            self.rect.y -= 8    # To avoid ball getting stuck in display
+        y_axis = Vector2()
+        y_axis.x = 0
+        y_axis.y = 1
+        if self.rect.top < screen.top or self.rect.bottom > screen.bottom:
+            self.vec = self.vec.reflect(y_axis)
 
-        '''Move ball'''
-        rect.left += self.speed * dir_[0]
-        rect.top += self.speed * dir_[1]
+    def handle_pad_collision(self):
+        """Check and handle collision with pads"""
+        rect = self.rect
+        pad_l = self.pad_left
+        pad_r = self.pad_right
+        x_axis_normal = Vector2()
+        x_axis_normal.x = 0
+        x_axis_normal.y = 1
+
+        max_angle = 60
+        if rect.right > pad_r.left:
+            if rect.bottom > pad_r.top and rect.top < pad_r.bottom:
+                rel_diff_pad_center = 2 * ((pad_r.centery - rect.centery) / (pad_r.h + rect.h))
+                angle = max_angle * rel_diff_pad_center + 180
+                self.vec.from_polar((1, angle))
+                self.speed = self.min_speed + self.max_speed * abs(rel_diff_pad_center)
+            elif rect.bottom == pad_r.top or rect.top == pad_r.bottom:
+                self.vec = self.vec.reflect(x_axis_normal)
+        elif rect.left < pad_l.right:
+            if rect.bottom > pad_l.top and rect.top < pad_l.bottom:
+                rel_diff_pad_center = 2 * ((rect.centery - pad_l.centery) / (pad_l.h + rect.h))
+                angle = max_angle * rel_diff_pad_center
+                self.vec.from_polar((1, angle))
+                self.speed = self.min_speed + self.max_speed * abs(rel_diff_pad_center)
+            elif rect.bottom == pad_l.top or rect.top == pad_l.bottom:
+                self.vec = self.vec.reflect(x_axis_normal)
+
+    def outside_display(self):
+        rect = self.rect
+        return rect.left > self.pad_right.right or rect.right < self.pad_left.left
 
 
 player_left_controls = constants.K_w, constants.K_s
@@ -126,7 +169,7 @@ def main():
     run_game = True
     while run_game:
         '''Set FPS'''
-        clock.tick(60)
+        clock.tick_busy_loop(60)
 
         '''Handle input events'''
         is_pressed = key.get_pressed()
@@ -160,7 +203,7 @@ def main():
 
 def init_screen():
     """Initialize screen and background"""
-    screen = display.set_mode((800, 400))
+    screen = display.set_mode((500, 400))
     display.set_caption("Pong")
     background = Surface(screen.get_size())
     background = background.convert()
