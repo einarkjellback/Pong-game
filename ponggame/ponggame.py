@@ -30,7 +30,7 @@ class Pad(sprite.Sprite):
         self.offset_width = 30
         screen = display.get_surface()
         screen_middle = screen.get_height() / 2
-        self.rect.centery = screen_middle
+        self.rect.centery = int(round(screen_middle))
         if align_right:
             self.rect.right = screen.get_width() - self.offset_width
         else:
@@ -64,7 +64,8 @@ class Ball(sprite.Sprite):
         self.max_speed = 10.0
         self.speed = self.min_speed
         self.vec: Vector2 = Vector2()
-        self.vec.x = 1.0
+        self.start_x = 1.0
+        self.vec.x = self.start_x
         self.vec.y = 0.0
         self.pad_left = pad_left
         self.pad_right = pad_right
@@ -82,7 +83,7 @@ class Ball(sprite.Sprite):
         screen = display.get_surface()
         width_middle = (screen.get_width() - width) / 2
         height_middle = (screen.get_height() - height) / 2
-        self.START_POS = width_middle, height_middle
+        self.START_POS = int(round(width_middle)), int(round(height_middle))
         self.rect.centerx, self.rect.centery = self.START_POS
 
     def update(self):
@@ -92,14 +93,15 @@ class Ball(sprite.Sprite):
         if self.outside_display():
             self.rect.centerx, self.rect.centery = self.START_POS
             self.speed = self.min_speed
-            self.vec.x = 1.0
+            self.start_x *= -1
+            self.vec.x = self.start_x
             self.vec.y = 0.0
         else:
             self.handle_pad_collision()
             self.handle_display_collision()
         self.move_ball()
-        if self.speed > self.max_speed:
-            print(self.speed)
+        # if self.speed > self.max_speed:
+        #     print(self.speed)
 
     def move_ball(self):
         """Move ball"""
