@@ -1,4 +1,5 @@
 import enum
+from math import ceil
 
 import pygame
 from pygame import *
@@ -60,18 +61,30 @@ def sgn(val):
 class Ball(sprite.Sprite):
     def __init__(self, pad_left, pad_right):
         sprite.Sprite.__init__(self)
-        self.min_speed = 5.0
-        self.max_speed = 10.0
-        self.speed = self.min_speed
+        self.MAX_ANGLE = 60
+        self.MIN_SPEED = 1.0
+        self.MAX_SPEED = 1.0
+        self.START_X = 1.0
+        self.START_Y = 0.0
         self.vec: Vector2 = Vector2()
-        self.start_x = 1.0
-        self.vec.x = self.start_x
-        self.vec.y = 0.0
+        self.xy_error = 0.0, 0.0  # Used to correct rounding errors in x and y when moving each frame
+
         self.pad_left = pad_left
         self.pad_right = pad_right
-        self.acc_xy_error = 0.0, 0.0  # Used to correct accumulated rounding errors in x and y when moving each frame
 
-        '''Construct ball image'''
+        self.make_image()
+        self.init_start_pos()
+
+    def init_start_pos(self):
+        """Position ball on screen"""
+        screen = display.get_surface()
+        width_middle = (screen.get_width() - self.rect.w) / 2
+        height_middle = (screen.get_height() - self.rect.h) / 2
+        self.START_POS = int(round(width_middle)), int(round(height_middle))
+        self.reset_ball()
+
+    def make_image(self):
+        """Construct ball image"""
         width = 10
         height = 10
         self.image = Surface((width, height))
@@ -79,42 +92,33 @@ class Ball(sprite.Sprite):
         self.image.fill(color_white)
         self.rect: Rect = self.image.get_bounding_rect()
 
-        '''Position ball on screen'''
-        screen = display.get_surface()
-        width_middle = (screen.get_width() - width) / 2
-        height_middle = (screen.get_height() - height) / 2
-        self.START_POS = int(round(width_middle)), int(round(height_middle))
-        self.rect.centerx, self.rect.centery = self.START_POS
-
     def update(self):
-        old_vec = Vector2()
-        old_vec.x = self.vec.x
-        old_vec.y = self.vec.y
-        if self.outside_display():
-            self.rect.centerx, self.rect.centery = self.START_POS
-            self.speed = self.min_speed
-            self.start_x *= -1
-            self.vec.x = self.start_x
-            self.vec.y = 0.0
-        else:
+        if not self.handle_outside_display():
             self.handle_pad_collision()
             self.handle_display_collision()
         self.move_ball()
-        # if self.speed > self.max_speed:
-        #     print(self.speed)
+        if self.speed > self.MAX_SPEED:
+            print(self.speed)
 
     def move_ball(self):
         """Move ball"""
         delta_x = self.speed * (self.vec.x ** 2) * sgn(self.vec.x)
         delta_y = self.speed * (self.vec.y ** 2) * sgn(self.vec.y)
-        error_x = self.acc_xy_error[0]
-        error_y = self.acc_xy_error[1]
-        delta_x_corrected = round(delta_x + error_x)
-        delta_y_corrected = round(delta_y + error_y)
-        new_error_x = delta_x - delta_x_corrected
-        new_error_y = delta_y - delta_y_corrected
-        self.acc_xy_error = error_x + new_error_x, error_y + new_error_y
-        self.rect.move_ip(delta_x_corrected, delta_y_corrected)
+
+        error_x = self.xy_error[0]
+        error_y = self.xy_error[1]
+
+        delta_x_corrected = delta_x + error_x
+        delta_y_corrected = delta_y + error_y
+
+        delta_x_corr_rounded = round(delta_x_corrected)
+        delta_y_corr_rounded = round(delta_y_corrected)
+
+        new_error_x = delta_x_corrected - delta_x_corr_rounded
+        new_error_y = delta_y_corrected - delta_y_corr_rounded
+
+        self.xy_error = new_error_x, new_error_y
+        self.rect.move_ip(delta_x_corr_rounded, delta_y_corr_rounded)
 
     def handle_display_collision(self):
         """Check and handle collision with top and bottom of display"""
@@ -127,34 +131,78 @@ class Ball(sprite.Sprite):
 
     def handle_pad_collision(self):
         """Check and handle collision with pads"""
-        rect = self.rect
-        pad_l = self.pad_left
-        pad_r = self.pad_right
+        if not self.handle_broad_side_collision():
+            self.handle_end_collision()
+
+    def handle_end_collision(self):
+        """Check and handle collision with either ends of pads. Returns True if collision with either ends"""
         x_axis_normal = Vector2()
         x_axis_normal.x = 0
         x_axis_normal.y = 1
 
-        max_angle = 60
-        if rect.right > pad_r.left:
-            if rect.bottom > pad_r.top and rect.top < pad_r.bottom:
-                rel_diff_pad_center = 2 * ((pad_r.centery - rect.centery) / (pad_r.h + rect.h))
-                angle = max_angle * rel_diff_pad_center + 180
-                self.vec.from_polar((1, angle))
-                self.speed = self.min_speed + self.max_speed * abs(rel_diff_pad_center)
-            elif rect.bottom == pad_r.top or rect.top == pad_r.bottom:
-                self.vec = self.vec.reflect(x_axis_normal)
-        elif rect.left < pad_l.right:
-            if rect.bottom > pad_l.top and rect.top < pad_l.bottom:
-                rel_diff_pad_center = 2 * ((rect.centery - pad_l.centery) / (pad_l.h + rect.h))
-                angle = max_angle * rel_diff_pad_center
-                self.vec.from_polar((1, angle))
-                self.speed = self.min_speed + self.max_speed * abs(rel_diff_pad_center)
-            elif rect.bottom == pad_l.top or rect.top == pad_l.bottom:
-                self.vec = self.vec.reflect(x_axis_normal)
+        collided = self.collision_right_pad() or self.collision_left_pad()
+        if collided:
+            self.vec = self.vec.reflect(x_axis_normal)
+        return collided
 
-    def outside_display(self):
+    def collision_left_pad(self):
+        delta_y = ceil((self.speed * self.vec.x ** 2) / 2)
         rect = self.rect
-        return rect.left > self.pad_right.right or rect.right < self.pad_left.left
+        pad_l = self.pad_right
+        return pad_l.right >= rect.left and pad_l.left <= rect.right \
+               and pad_l.top - delta_y <= rect.bottom <= pad_l.top + delta_y \
+               and pad_l.bottom - delta_y <= rect.top <= pad_l.bottom + delta_y
+
+    def collision_right_pad(self):
+        delta_y = ceil((self.speed * self.vec.x ** 2) / 2)
+        rect = self.rect
+        pad_r = self.pad_right
+        return pad_r.left <= rect.right and pad_r.right >= rect.left \
+               and pad_r.top - delta_y <= rect.bottom <= pad_r.top + delta_y \
+               and pad_r.bottom - delta_y <= rect.top <= pad_r.bottom + delta_y
+
+    def handle_broad_side_collision(self):
+        """Check and handle collision with pad broad sides. Returns True if collision with pad broad side"""
+        delta_x = ceil((self.speed * self.vec.x ** 2) / 2)
+        rect = self.rect
+        pad_l = self.pad_left
+        pad_r = self.pad_right
+
+        if pad_r.left - delta_x <= rect.right <= pad_r.left + delta_x \
+                and rect.bottom > pad_r.top \
+                and rect.top < pad_r.bottom:
+            rel_diff_pad_center = 2 * ((pad_r.centery - rect.centery) / (pad_r.h + rect.h))
+            angle = self.MAX_ANGLE * rel_diff_pad_center + 180
+            self.vec.from_polar((1, angle))
+            self.speed = self.MIN_SPEED + self.MAX_SPEED * abs(rel_diff_pad_center)
+            return True
+            # if abs(rel_diff_pad_center) > 1.0:
+            #     print(rel_diff_pad_center)
+        if pad_l.right - delta_x <= rect.left <= pad_l.right + delta_x \
+                and rect.bottom > pad_l.top \
+                and rect.top < pad_l.bottom:
+            rel_diff_pad_center = 2 * ((rect.centery - pad_l.centery) / (pad_l.h + rect.h))
+            angle = self.MAX_ANGLE * rel_diff_pad_center
+            self.vec.from_polar((1, angle))
+            self.speed = (self.MAX_SPEED - self.MIN_SPEED) * abs(rel_diff_pad_center) + self.MIN_SPEED
+            return True
+        return False
+
+    def handle_outside_display(self):
+        rect = self.rect
+        rect_disp = display.get_surface().get_rect()
+        delta = 65
+        outside_display = rect.left > rect_disp.right + delta or rect.right < rect_disp.left - delta
+        if outside_display:
+            self.reset_ball()
+        return outside_display
+
+    def reset_ball(self):
+        self.rect.centerx, self.rect.centery = self.START_POS
+        self.speed = self.MIN_SPEED
+        self.START_X *= -1
+        self.vec.x = self.START_X
+        self.vec.y = self.START_Y
 
 
 player_left_controls = constants.K_w, constants.K_s
@@ -205,7 +253,7 @@ def main():
 
 def init_screen():
     """Initialize screen and background"""
-    screen = display.set_mode((500, 400))
+    screen = display.set_mode((300, 400))
     display.set_caption("Pong")
     background = Surface(screen.get_size())
     background = background.convert()
