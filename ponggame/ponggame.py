@@ -61,25 +61,24 @@ def sgn(val):
 class Ball(sprite.Sprite):
     def __init__(self, pad_left, pad_right):
         sprite.Sprite.__init__(self)
+        self.pad_left = pad_left
+        self.pad_right = pad_right
+
         self.MAX_ANGLE = 60
         self.MIN_SPEED = 1.0
         self.MAX_SPEED = 1.0
+        self.speed = self.MIN_SPEED
         self.START_X = 1.0
         self.START_Y = 0.0
         self.vec: Vector2 = Vector2()
         self.xy_error = 0.0, 0.0  # Used to correct rounding errors in x and y when moving each frame
 
-        self.pad_left = pad_left
-        self.pad_right = pad_right
-
         self.make_image()
-        self.init_start_pos()
 
-    def init_start_pos(self):
         """Position ball on screen"""
-        screen = display.get_surface()
-        width_middle = (screen.get_width() - self.rect.w) / 2
-        height_middle = (screen.get_height() - self.rect.h) / 2
+        screen = display.get_surface().get_rect()
+        width_middle = (screen.w - self.rect.w) / 2
+        height_middle = (screen.h - self.rect.h) / 2
         self.START_POS = int(round(width_middle)), int(round(height_middle))
         self.reset_ball()
 
@@ -191,7 +190,8 @@ class Ball(sprite.Sprite):
     def handle_outside_display(self):
         rect = self.rect
         rect_disp = display.get_surface().get_rect()
-        delta = 65
+        updates_after_disappearing_before_reset = 60
+        delta = self.speed * updates_after_disappearing_before_reset
         outside_display = rect.left > rect_disp.right + delta or rect.right < rect_disp.left - delta
         if outside_display:
             self.reset_ball()
