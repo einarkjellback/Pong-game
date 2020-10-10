@@ -65,8 +65,9 @@ class Ball(sprite.Sprite):
         self.pad_right = pad_right
 
         self.MAX_ANGLE = 60
-        self.MIN_SPEED = 1.0
-        self.MAX_SPEED = 1.0
+        self.MIN_SPEED = 5.0
+        self.MAX_SPEED = 10.0
+        self.SUPER_SPEED = self.MAX_SPEED * 1.2  # Ball's speed if it collides with pad ends
         self.speed = self.MIN_SPEED
         self.START_X = 1.0
         self.START_Y = 0.0
@@ -96,11 +97,9 @@ class Ball(sprite.Sprite):
             self.handle_pad_collision()
             self.handle_display_collision()
         self.move_ball()
-        if self.speed > self.MAX_SPEED:
-            print(self.speed)
 
     def move_ball(self):
-        """Move ball"""
+        """Move ball and corrects rounding errors in trajectory from last update"""
         delta_x = self.speed * (self.vec.x ** 2) * sgn(self.vec.x)
         delta_y = self.speed * (self.vec.y ** 2) * sgn(self.vec.y)
 
@@ -130,74 +129,82 @@ class Ball(sprite.Sprite):
 
     def handle_pad_collision(self):
         """Check and handle collision with pads"""
-        if not self.handle_broad_side_collision():
+        if not self.handle_long_side_collision():
             self.handle_end_collision()
 
     def handle_end_collision(self):
         """Check and handle collision with either ends of pads. Returns True if collision with either ends"""
-        x_axis_normal = Vector2()
-        x_axis_normal.x = 0
-        x_axis_normal.y = 1
-
-        collided = self.collision_right_pad() or self.collision_left_pad()
+        collided = self.check_end_collision(False) or self.check_end_collision(True)
         if collided:
-            self.vec = self.vec.reflect(x_axis_normal)
+            x_axis_normal = Vector2()
+            x_axis_normal.x = 0
+            x_axis_normal.y = 1
+            self.vec.x *= -1
+            self.vec.y *= -1
+            self.speed = self.SUPER_SPEED
         return collided
 
-    def collision_left_pad(self):
-        delta_y = ceil((self.speed * self.vec.x ** 2) / 2)
-        rect = self.rect
-        pad_l = self.pad_right
-        return pad_l.right >= rect.left and pad_l.left <= rect.right \
-               and pad_l.top - delta_y <= rect.bottom <= pad_l.top + delta_y \
-               and pad_l.bottom - delta_y <= rect.top <= pad_l.bottom + delta_y
+    def check_end_collision(self, left_pad):
+        """Checks if the ball is colliding with either the top or bottom of the pads"""
+        delta_y = max(1, ceil((self.speed * self.vec.y ** 2) / 2.0))
+        rect: Rect = self.rect
+        pad = self.pad_left if left_pad else self.pad_right
+        collision_zone_x = 0.5 * (pad.w + rect.w)
+        is_aligned_x = abs(pad.centerx - rect.centerx) < collision_zone_x
+        is_aligned_top = pad.top - delta_y <= rect.bottom <= pad.top + delta_y
+        is_aligned_bottom = pad.bottom - delta_y <= rect.top <= pad.bottom + delta_y
+        is_going_down = self.vec.y > 0
+        is_going_up = self.vec.y < 0
+        return is_aligned_x and ((is_aligned_top and is_going_down) or (is_aligned_bottom and is_going_up))
 
-    def collision_right_pad(self):
-        delta_y = ceil((self.speed * self.vec.x ** 2) / 2)
-        rect = self.rect
-        pad_r = self.pad_right
-        return pad_r.left <= rect.right and pad_r.right >= rect.left \
-               and pad_r.top - delta_y <= rect.bottom <= pad_r.top + delta_y \
-               and pad_r.bottom - delta_y <= rect.top <= pad_r.bottom + delta_y
+    def handle_long_side_collision(self):
+        """Check and handle collision with pad broad sides. Returns True if collision with either pads' broad sides"""
+        check_left = False
+        collided_right = self.check_long_side_collision(check_left)
+        if collided_right:
+            self.reflect_from_long_side(check_left)
+            return collided_right
+        collided_left = self.check_long_side_collision(True)
+        if collided_left:
+            self.reflect_from_long_side(True)
+        return collided_left
 
-    def handle_broad_side_collision(self):
-        """Check and handle collision with pad broad sides. Returns True if collision with pad broad side"""
+    def reflect_from_long_side(self, left_pad):
+        """Reflects ball from a pad's long side"""
+        rect = self.rect
+        pad = self.pad_left if left_pad else self.pad_right
+        rel_diff_pad_center = 2 * ((rect.centery - pad.centery) / (pad.h + rect.h))
+        angle = self.MAX_ANGLE * rel_diff_pad_center
+        angle *= 1 if left_pad else -1
+        angle += 0 if left_pad else 180
+        self.vec.from_polar((1, angle))
+        self.speed = (self.MAX_SPEED - self.MIN_SPEED) * abs(rel_diff_pad_center) + self.MIN_SPEED
+
+    def check_long_side_collision(self, left_pad):
+        """Checks if ball is colliding with long sides of pads"""
+        pad = self.pad_left if left_pad else self.pad_right
+        rect = self.rect
+        pad_side = pad.right if left_pad else pad.left
+        ball_side = rect.left if left_pad else rect.right
+
         delta_x = ceil((self.speed * self.vec.x ** 2) / 2)
-        rect = self.rect
-        pad_l = self.pad_left
-        pad_r = self.pad_right
-
-        if pad_r.left - delta_x <= rect.right <= pad_r.left + delta_x \
-                and rect.bottom > pad_r.top \
-                and rect.top < pad_r.bottom:
-            rel_diff_pad_center = 2 * ((pad_r.centery - rect.centery) / (pad_r.h + rect.h))
-            angle = self.MAX_ANGLE * rel_diff_pad_center + 180
-            self.vec.from_polar((1, angle))
-            self.speed = self.MIN_SPEED + self.MAX_SPEED * abs(rel_diff_pad_center)
-            return True
-            # if abs(rel_diff_pad_center) > 1.0:
-            #     print(rel_diff_pad_center)
-        if pad_l.right - delta_x <= rect.left <= pad_l.right + delta_x \
-                and rect.bottom > pad_l.top \
-                and rect.top < pad_l.bottom:
-            rel_diff_pad_center = 2 * ((rect.centery - pad_l.centery) / (pad_l.h + rect.h))
-            angle = self.MAX_ANGLE * rel_diff_pad_center
-            self.vec.from_polar((1, angle))
-            self.speed = (self.MAX_SPEED - self.MIN_SPEED) * abs(rel_diff_pad_center) + self.MIN_SPEED
-            return True
-        return False
+        is_aligned_x = pad_side - delta_x <= ball_side <= pad_side + delta_x
+        is_aligned_y = rect.bottom > pad.top and rect.top < pad.bottom
+        return is_aligned_x and is_aligned_y
 
     def handle_outside_display(self):
+        """Checks if the ball is outside the display and resets the Ball to start position if outside"""
         rect = self.rect
-        rect_disp = display.get_surface().get_rect()
+        screen = display.get_surface().get_rect()
         updates_after_disappearing_before_reset = 60
         delta = self.speed * updates_after_disappearing_before_reset
-        outside_display = rect.left > rect_disp.right + delta or rect.right < rect_disp.left - delta
+        outside_display = rect.left > screen.right + delta or rect.right < screen.left - delta
         if outside_display:
             self.reset_ball()
         return outside_display
 
     def reset_ball(self):
+        """Resets the ball to the start position"""
         self.rect.centerx, self.rect.centery = self.START_POS
         self.speed = self.MIN_SPEED
         self.START_X *= -1
@@ -205,11 +212,10 @@ class Ball(sprite.Sprite):
         self.vec.y = self.START_Y
 
 
-player_left_controls = constants.K_w, constants.K_s
-player_right_controls = constants.K_UP, constants.K_DOWN
-
-
 def main():
+    LEFT_CONTROLS = constants.K_w, constants.K_s
+    RIGHT_CONTROLS = constants.K_UP, constants.K_DOWN
+
     pygame.init()
     background, screen = init_screen()
     all_sprites, pad_left, pad_right = create_game_objects()
@@ -225,22 +231,8 @@ def main():
         is_pressed = key.get_pressed()
         if is_pressed[constants.K_ESCAPE]:
             run_game = False
-
-        '''Control left pad movement'''
-        if is_pressed[player_left_controls[0]]:
-            pad_left.move(PadMovement.UP)
-        elif is_pressed[player_left_controls[1]]:
-            pad_left.move(PadMovement.DOWN)
-        else:
-            pad_left.move(PadMovement.STOP)
-
-        '''Control right pad movement'''
-        if is_pressed[player_right_controls[0]]:
-            pad_right.move(PadMovement.UP)
-        elif is_pressed[player_right_controls[1]]:
-            pad_right.move(PadMovement.DOWN)
-        else:
-            pad_right.move(PadMovement.STOP)
+        handle_pad_movement(LEFT_CONTROLS, pad_left)
+        handle_pad_movement(RIGHT_CONTROLS, pad_right)
         event.pump()
 
         all_sprites.update()
@@ -251,9 +243,20 @@ def main():
         display.flip()
 
 
+def handle_pad_movement(controls, pad):
+    """Control pad movement"""
+    is_pressed = key.get_pressed()
+    if is_pressed[controls[0]]:
+        pad.move(PadMovement.UP)
+    elif is_pressed[controls[1]]:
+        pad.move(PadMovement.DOWN)
+    else:
+        pad.move(PadMovement.STOP)
+
+
 def init_screen():
     """Initialize screen and background"""
-    screen = display.set_mode((300, 400))
+    screen = display.set_mode((500, 400))
     display.set_caption("Pong")
     background = Surface(screen.get_size())
     background = background.convert()
